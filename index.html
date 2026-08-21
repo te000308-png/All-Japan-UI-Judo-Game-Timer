@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#000000">
+<title>柔道 試合タイマー（全日本UI）</title>
+<style>
+/* ===================================================================
+   全日本仕様の電光掲示板を模した表示盤。
+   ・上段に大きく試合時間、その右に抑え込み時間
+   ・下段に赤（上）／白（下）の得点バー
+   ・得点は遠距離視認を優先して I（一本）／W（技あり）／Y（有効）、
+     指導は S1・S2・S3 の文字で表す
+   操作はすべてタッチ。タップ・ダブルタップ・長押しの3種類だけで完結する。
+   =================================================================== */
+:root{
+  --bg:#000;
+  --panel:#0a0d12;
+  --line:#20262f;
+  --ink:#e8ecf4;
+  --dim:#6b7686;
+
+  --red:#d81f2a;          /* 赤選手 */
+  --red-deep:#8e1119;
+  --white:#eef2f8;        /* 白選手 */
+  --white-deep:#b9c2d0;
+
+  --led-green:#2bff78;    /* 試合中の時計 */
+  --led-amber:#ffc233;    /* 待て */
+  --led-red:#ff4a3d;      /* 試合終了 */
+  --led-cyan:#4de3ff;     /* 抑え込み */
+  --led-shido:#ffc233;    /* 指導 */
+
+  --gap:6px;
+  --fsTime:80px;
+  --fsOsae:48px;
+  --fsPt:52px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;overflow:hidden;}
+body{
+  background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic",system-ui,sans-serif;
+  touch-action:manipulation;
+  -webkit-user-select:none;user-select:none;
+}
+/* 数字は等幅（桁が動いても位置がぶれない） */
+.num{ font-variant-numeric:tabular-nums; font-feature-settings:"tnum" 1; font-weight:800; line-height:1; }
+
+#app{
+  height:100%;display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top) + 4px) calc(env(safe-area-inset-right) + 6px)
+          calc(env(safe-area-inset-bottom) + 6px) calc(env(safe-area-inset-left) + 6px);
+  gap:var(--gap);
+}
+
+/* ===================================================================
+   上部バー（操作は最小限。主な操作は表示盤へのタッチで行う）
+   =================================================================== */
+#bar{ display:flex;align-items:center;gap:5px;flex:0 0 auto;height:38px; }
+.chip{
+  height:100%;min-width:38px;padding:0 11px;
+  background:#12161d;border:1px solid var(--line);border-radius:9px;
+  color:var(--ink);font-size:13px;font-weight:700;font-family:inherit;
+  display:flex;align-items:center;justify-content:center;gap:5px;
+  cursor:pointer;white-space:nowrap;
+}
+.chip:disabled{ opacity:.35; }
+.chip.press{ transform:translateY(1px);filter:brightness(1.35); }
+.chip.on{ background:#26405e;border-color:#4b7fb5;color:#cfe6ff; }
+#stateChip{ min-width:112px;background:#0e1319; }
+#stateChip .dot{ width:9px;height:9px;border-radius:50%;background:var(--dim);flex:0 0 auto; }
+#stateChip.run .dot{ background:var(--led-green);box-shadow:0 0 9px var(--led-green); }
+#stateChip.stop .dot{ background:var(--led-amber);box-shadow:0 0 9px var(--led-amber); }
+#stateChip.over .dot{ background:var(--led-red);box-shadow:0 0 9px var(--led-red); }
+#stateChip.osae .dot{ background:var(--led-cyan);box-shadow:0 0 9px var(--led-cyan); }
+.grow{ flex:1 1 auto; }
+
+/* ===================================================================
+   表示盤
+   =================================================================== */
+#board{
+  flex:1 1 auto;min-height:0;position:relative;
+  display:grid;
+  grid-template-columns:1fr minmax(96px,25%);
+  grid-template-rows:1.5fr 1fr 1fr;
+  gap:var(--gap);
+}
+
+/* --- 試合時間 --- */
+#clock{
+  grid-column:1;grid-row:1;position:relative;
+  background:var(--panel);border:2px solid var(--line);border-radius:14px;
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;cursor:pointer;
+}
+#clock.press{ background:#161c25; }
+#time{
+  font-size:var(--fsTime);letter-spacing:.01em;
+  color:var(--led-green);text-shadow:0 0 .16em rgba(43,255,120,.55);
+  transition:color .12s linear;
+}
+#clock.stopped #time{ color:var(--led-amber);text-shadow:0 0 .16em rgba(255,194,51,.5); }
+#clock.over #time{ color:var(--led-red);text-shadow:0 0 .16em rgba(255,74,61,.5); }
+/* 残り10秒は点滅させて知らせる */
+#clock.warn #time{ animation:blink .5s steps(1,end) infinite; }
+@keyframes blink{ 50%{opacity:.25;} }
+
+.tag{
+  position:absolute;font-size:12px;font-weight:800;letter-spacing:.08em;
+  color:var(--dim);pointer-events:none;
+}
+#clockHint{ left:0;right:0;bottom:6px;text-align:center; }
+#gsTag{
+  left:10px;top:8px;padding:2px 8px;border-radius:6px;
+  background:#093a4a;color:var(--led-cyan);border:1px solid #12667f;display:none;
+}
+#gsTag.on{ display:block; }
+
+/* --- 抑え込み --- */
+#osae{
+  grid-column:2;grid-row:1;position:relative;
+  background:var(--panel);border:2px solid var(--line);border-radius:14px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+#osaeNum{
+  font-size:var(--fsOsae);color:#59636f;line-height:1;
+  transition:color .12s linear;
+}
+#osae.on #osaeNum{ color:var(--led-cyan);text-shadow:0 0 .18em rgba(77,227,255,.6); }
+#osae.side-R{ border-color:var(--red); box-shadow:inset 0 0 0 2px rgba(216,31,42,.35); }
+#osae.side-W{ border-color:var(--white-deep); box-shadow:inset 0 0 0 2px rgba(238,242,248,.25); }
+#osae.tight #osaeCap,#osae.tight #osaeFoot{ display:none; }
+#osaeCap{ position:absolute;top:6px;left:0;right:0;text-align:center;font-size:11px;font-weight:800;color:var(--dim);letter-spacing:.1em; }
+#osaeFoot{ position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:12px;font-weight:800;color:var(--dim); }
+
+/* 抑え込みの開始ゾーン（上＝赤／下＝白。得点バーの並びと同じ順） */
+.pick{
+  position:absolute;left:0;right:0;height:50%;
+  border:0;background:transparent;cursor:pointer;
+  display:flex;align-items:center;justify-content:flex-start;padding-left:5px;
+  font-family:inherit;font-size:clamp(11px,1.7vh,16px);font-weight:900;
+  color:#fff;opacity:.95;
+}
+.pick span{ padding:1px 5px;border-radius:5px;line-height:1.25; }
+#pickR span{ background:rgba(0,0,0,.45); }
+#pickW span{ background:rgba(0,0,0,.12); }
+#pickR{ top:0;   background:linear-gradient(180deg,rgba(216,31,42,.55),rgba(216,31,42,.08)); }
+#pickW{ bottom:0;background:linear-gradient(0deg,rgba(238,242,248,.5),rgba(238,242,248,.06));color:#0b0e13; }
+.pick.press{ filter:brightness(1.5); }
+#osae.running .pick{ display:none; }
+
+/* --- 得点バー --- */
+.prow{
+  grid-column:1 / 3;position:relative;
+  display:grid;grid-template-columns:auto 1fr 1fr 1fr 1.25fr;gap:3px;
+  border-radius:14px;overflow:hidden;
+}
+body.no-y .prow{ grid-template-columns:auto 1fr 1fr 1.25fr; }
+#rowR{ grid-row:2;background:var(--red-deep); }
+#rowW{ grid-row:3;background:var(--white-deep); }
+
+/* 左端の選手表示（抑え込み中はここが「抑」に変わって光る） */
+.side{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  width:clamp(38px,7vw,86px);gap:2px;font-weight:900;
+}
+#rowR .side{ background:var(--red);color:#fff; }
+#rowW .side{ background:var(--white);color:#11151c; }
+.side .nm{ font-size:clamp(15px,3.4vh,34px);line-height:1; }
+.side .os{
+  font-size:clamp(10px,1.9vh,18px);line-height:1;letter-spacing:.06em;
+  padding:1px 5px;border-radius:4px;background:#000;color:var(--led-cyan);
+  display:none;animation:blink .6s steps(1,end) infinite;
+}
+.prow.holding .side .os{ display:block; }
+
+.cell{
+  position:relative;display:flex;align-items:center;justify-content:center;gap:.12em;
+  cursor:pointer;overflow:hidden;
+}
+#rowR .cell{ background:var(--red);color:#fff; }
+#rowW .cell{ background:var(--white);color:#11151c; }
+.cell.press{ filter:brightness(1.28); }
+.cell .lb{ font-size:calc(var(--fsPt) * .42);font-weight:900;opacity:.62;line-height:1; }
+.cell .vl{ font-size:var(--fsPt);font-weight:800;line-height:1;font-variant-numeric:tabular-nums; }
+.cell.zero .vl{ opacity:.26; }
+.cell.zero .lb{ opacity:.4; }
+#rowW .cell.zero .vl{ opacity:.34; }
+/* 抑え込みで加算中の点は点滅させる（解けた時点で確定） */
+.cell.live .vl{ animation:blink .45s steps(1,end) infinite; }
+.cell.flash{ animation:flash3 .9s steps(1,end) 1; }
+@keyframes flash3{ 0%,33%,66%{filter:brightness(2.1);} 16%,50%,100%{filter:none;} }
+
+/* 指導セル */
+.prow.won{ outline:3px solid #ffd34d;outline-offset:-3px;box-shadow:0 0 22px rgba(255,211,77,.45); }
+
+.cell.shido .vl{ color:var(--led-shido); }
+#rowW .cell.shido .vl{ color:#c07d00; }
+.cell.shido.s3 .vl{ color:#ffe14d;background:#111;border-radius:.12em;padding:0 .12em; }
+
+/* 長押しの進み具合 */
+.hold{ position:absolute;left:0;bottom:0;height:4px;width:0;background:#000;opacity:.55; }
+#rowW .hold{ background:#fff; }
+
+/* ===================================================================
+   勝者バナー・オーバーレイ
+   =================================================================== */
+#win{
+  grid-column:1 / 3;grid-row:1;z-index:5;display:none;
+  align-items:center;justify-content:center;flex-direction:column;gap:.1em;
+  background:rgba(0,0,0,.92);border:2px solid #ffd34d;border-radius:14px;cursor:pointer;
+}
+#win.on{ display:flex; }
+#winWho{ font-size:clamp(30px,9.5vh,132px);font-weight:900;line-height:1; }
+#winWho.R{ color:#ff5561;text-shadow:0 0 .18em rgba(216,31,42,.7); }
+#winWho.W{ color:#fff;text-shadow:0 0 .18em rgba(255,255,255,.45); }
+#winWhy{ font-size:clamp(16px,4vh,52px);font-weight:800;color:var(--ink);letter-spacing:.06em; }
+#winTap{ font-size:12px;color:var(--dim);margin-top:.8em; }
+
+.sheet{
+  position:fixed;inset:0;z-index:20;display:none;
+  background:rgba(0,0,0,.82);
+  padding:calc(env(safe-area-inset-top) + 10px) 10px calc(env(safe-area-inset-bottom) + 10px);
+  overflow:auto;-webkit-overflow-scrolling:touch;
+}
+.sheet.on{ display:block; }
+.sheet-in{
+  max-width:720px;margin:0 auto;background:#11151c;border:1px solid var(--line);
+  border-radius:16px;padding:14px;
+}
+.sheet h2{ font-size:16px;margin-bottom:10px;display:flex;align-items:center;gap:8px; }
+.sheet h2 .x{ margin-left:auto; }
+.srow{
+  display:flex;align-items:center;gap:8px;padding:9px 4px;border-top:1px solid var(--line);
+}
+.srow .lbl{ flex:1 1 auto;font-size:14px;font-weight:700; }
+.srow .val{ font-size:19px;font-weight:800;min-width:82px;text-align:center;font-variant-numeric:tabular-nums; }
+.sbtn{
+  width:44px;height:40px;border-radius:9px;border:1px solid var(--line);background:#1b212b;
+  color:var(--ink);font-size:19px;font-weight:800;font-family:inherit;cursor:pointer;flex:0 0 auto;
+}
+.sbtn.wide{ width:auto;padding:0 14px;font-size:14px; }
+.sbtn.press{ filter:brightness(1.4); }
+.sbtn.danger{ background:#3a1519;border-color:#7a2a30;color:#ffb4b4; }
+.help-list{ font-size:14px;line-height:1.85; }
+.help-list b{ color:#8fd0ff; }
+.help-list li{ margin-left:1.2em; }
+.note{ font-size:12px;color:var(--dim);line-height:1.7;margin-top:8px; }
+
+/* 縦画面では時計を少し小さく、得点バーを厚めにする */
+@media (orientation:portrait){
+  #board{ grid-template-rows:1.15fr 1fr 1fr;grid-template-columns:1fr minmax(84px,30%); }
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header id="bar">
+    <button class="chip" id="stateChip"><span class="dot"></span><span id="stateTxt">はじめ待ち</span></button>
+    <button class="chip" id="cGs">GS</button>
+    <span class="grow"></span>
+    <button class="chip" id="cUndo">↩ 取消</button>
+    <button class="chip" id="cNext">次の試合</button>
+    <button class="chip" id="cEdit">⚙</button>
+    <button class="chip" id="cHelp">?</button>
+    <button class="chip" id="cFull">⛶</button>
+  </header>
+
+  <main id="board">
+    <div id="clock">
+      <div id="time" class="num">3:00</div>
+      <div class="tag" id="gsTag">ゴールデンスコア</div>
+      <div class="tag" id="clockHint">タップ＝開始 / 停止　　ダブルタップ＝時間の編集</div>
+    </div>
+
+    <div id="osae">
+      <div id="osaeCap">抑え込み</div>
+      <div id="osaeNum" class="num">00</div>
+      <div id="osaeFoot">タップで開始</div>
+      <button class="pick" id="pickR"><span>赤 ▲</span></button>
+      <button class="pick" id="pickW"><span>白 ▼</span></button>
+    </div>
+
+    <div class="prow" id="rowR">
+      <div class="side"><span class="nm">赤</span><span class="os">抑</span></div>
+      <div class="cell zero" data-s="R" data-k="i"><span class="lb">I</span><span class="vl num">0</span><span class="hold"></span></div>
+      <div class="cell zero" data-s="R" data-k="w"><span class="lb">W</span><span class="vl num">0</span><span class="hold"></span></div>
+      <div class="cell zero" data-s="R" data-k="y"><span class="lb">Y</span><span class="vl num">0</span><span class="hold"></span></div>
+      <div class="cell zero shido" data-s="R" data-k="s"><span class="vl num">S</span><span class="hold"></span></div>
+    </div>
+
+    <div class="prow" id="rowW">
+      <div class="side"><span class="nm">白</span><span class="os">抑</span></div>
+      <div class="cell zero" data-s="W" data-k="i"><span class="lb">I</span><span class="vl num">0</span><span class="hold"></span></div>
+      <div class="cell zero" data-s="W" data-k="w"><span class="lb">W</span><span class="vl num">0</span><span class="hold"></span></div>
+      <div class="cell zero" data-s="W" data-k="y"><span class="lb">Y</span><span class="vl num">0</span><span class="hold"></span></div>
+      <div class="cell zero shido" data-s="W" data-k="s"><span class="vl num">S</span><span class="hold"></span></div>
+    </div>
+
+    <div id="win">
+      <div id="winWho" class="num">赤</div>
+      <div id="winWhy">一本</div>
+      <div id="winTap">タップで閉じる</div>
+    </div>
+  </main>
+</div>
+
+<!-- 設定シート（時計のダブルタップ、または ⚙ で開く） -->
+<div class="sheet" id="editSheet">
+  <div class="sheet-in">
+    <h2>設定<button class="chip x" id="editClose">閉じる</button></h2>
+
+    <div class="srow">
+      <span class="lbl">試合時間</span>
+      <button class="sbtn" data-adj="p1,-60">−分</button>
+      <button class="sbtn" data-adj="p1,-10">−10</button>
+      <span class="val" id="vP1">3:00</span>
+      <button class="sbtn" data-adj="p1,10">+10</button>
+      <button class="sbtn" data-adj="p1,60">+分</button>
+    </div>
+
+    <div class="srow">
+      <span class="lbl">残り時間（この試合）</span>
+      <button class="sbtn" data-adj="now,-60">−分</button>
+      <button class="sbtn" data-adj="now,-1">−秒</button>
+      <span class="val" id="vNow">3:00</span>
+      <button class="sbtn" data-adj="now,1">+秒</button>
+      <button class="sbtn" data-adj="now,60">+分</button>
+    </div>
+
+    <div class="srow">
+      <span class="lbl">抑え込み I（一本）</span>
+      <button class="sbtn" data-adj="p3,-1">−</button>
+      <span class="val" id="vP3">20秒</span>
+      <button class="sbtn" data-adj="p3,1">+</button>
+    </div>
+    <div class="srow">
+      <span class="lbl">抑え込み W（技あり）</span>
+      <button class="sbtn" data-adj="p4,-1">−</button>
+      <span class="val" id="vP4">10秒</span>
+      <button class="sbtn" data-adj="p4,1">+</button>
+    </div>
+    <div class="srow">
+      <span class="lbl">抑え込み Y（有効）</span>
+      <button class="sbtn" data-adj="p5,-1">−</button>
+      <span class="val" id="vP5">5秒</span>
+      <button class="sbtn" data-adj="p5,1">+</button>
+    </div>
+
+    <div class="srow">
+      <span class="lbl">有効（Y）を使う</span>
+      <button class="sbtn wide" id="tgY">使う</button>
+    </div>
+    <div class="srow">
+      <span class="lbl">時計の向き</span>
+      <button class="sbtn wide" id="tgDir">減算</button>
+    </div>
+    <div class="srow">
+      <span class="lbl">ブザー</span>
+      <button class="sbtn wide" id="tgBuz">大・連続</button>
+      <button class="sbtn wide" id="tgTest">試聴</button>
+    </div>
+
+    <div class="srow">
+      <span class="lbl">試合をやり直す</span>
+      <button class="sbtn wide danger" id="btnClear">オールクリア</button>
+      <button class="sbtn wide danger" id="btnReset">初期設定に戻す</button>
+    </div>
+    <p class="note">設定は端末に保存され、次に開いたときも引き継がれます。</p>
+  </div>
+</div>
+
+<!-- 操作ヘルプ -->
+<div class="sheet" id="helpSheet">
+  <div class="sheet-in">
+    <h2>操作（すべてタッチ）<button class="chip x" id="helpClose">閉じる</button></h2>
+    <ul class="help-list">
+      <li><b>試合時間</b>：タップ＝はじめ／待て、ダブルタップ＝編集画面</li>
+      <li><b>抑え込み</b>：上半分（赤）／下半分（白）をタップで開始、もう一度タップで「解けた」、ダブルタップで 00 に戻す</li>
+      <li><b>得点</b>：セルをタップで＋1、長押しで−1</li>
+      <li><b>I</b>＝一本　<b>W</b>＝技あり　<b>Y</b>＝有効　<b>S1/S2/S3</b>＝指導</li>
+      <li><b>↩ 取消</b>：直前の操作を取り消す</li>
+    </ul>
+    <p class="note">
+      W が 2 つで合わせ技一本、S3 で反則負けになり、その時点で試合が終わります。<br>
+      抑え込み中は加算される点が点滅し、「解けた」で確定します。<br>
+      「待て」で時計を止めると抑え込みも一緒に止まり、「はじめ」で一緒に動き出します（そのまま／よし）。<br>
+      ゴールデンスコア（GS）中は加算表示になり、先に取った側が勝ちです。
+    </p>
+  </div>
+</div>
+
+<script>
+"use strict";
+function el(id){ return document.getElementById(id); }
+function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+function clone(o){ return JSON.parse(JSON.stringify(o)); }
+function vib(ms){ if(navigator.vibrate){ try{ navigator.vibrate(ms); }catch(e){} } }
+
+/* ===================================================================
+   1. ブザー（実機ブザーの倍音構成をそのまま鳴らす）
+   =================================================================== */
+var actx=null, buzzWave=null;
+var BUZZ_F0=63.85;
+var BUZZ=[[41,0.055,5.404],[43,0.189,6.047],[44,0.645,2.559],[45,0.564,5.649],
+          [46,0.047,6.035],[47,0.352,1.179],[48,0.087,4.436],[49,0.518,1.514],
+          [50,1.000,5.950],[51,0.240,1.159],[52,0.036,2.848],[53,0.126,3.220],
+          [55,0.121,4.941],[57,0.043,5.918],[59,0.026,3.588],[87,0.066,2.685],
+          [88,0.030,4.741],[95,0.043,1.032],[97,0.034,1.092],[100,0.038,0.624],
+          [101,0.041,5.012],[149,0.025,1.378],[150,0.043,4.237],[151,0.037,3.478]];
+var BUZZ_MODES=[{name:"大・連続",vol:.6,pulse:false},
+                {name:"大・断続",vol:.6,pulse:true},
+                {name:"小・連続",vol:.22,pulse:false},
+                {name:"小・断続",vol:.22,pulse:true},
+                {name:"消音",vol:0,pulse:false}];
+var BUZZ_SEC=2.5, BUZZ_ON=.22, BUZZ_OFF=.13;
+
+function initAudio(){
+  if(actx){ if(actx.state==="suspended"){ try{actx.resume();}catch(e){} } return; }
+  var AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
+  actx=new AC();
+  var o=actx.createOscillator(), g=actx.createGain();
+  g.gain.value=.0001; o.connect(g); g.connect(actx.destination);
+  o.start(); o.stop(actx.currentTime+.03);
+}
+function makeWave(){
+  var N=152, re=new Float32Array(N), im=new Float32Array(N);
+  for(var i=0;i<BUZZ.length;i++){
+    var n=BUZZ[i][0], a=BUZZ[i][1], p=BUZZ[i][2];
+    re[n]=a*Math.cos(p); im[n]=a*Math.sin(p);
+  }
+  return actx.createPeriodicWave(re,im);
+}
+function tone(dur,when,vol){
+  if(!actx) return;
+  var t0=actx.currentTime+(when||0), t1=t0+dur;
+  if(!buzzWave) buzzWave=makeWave();
+  var g=actx.createGain();
+  g.gain.setValueAtTime(0,t0);
+  g.gain.linearRampToValueAtTime(vol,t0+.012);
+  g.gain.setValueAtTime(vol,Math.max(t0+.013,t1-.03));
+  g.gain.linearRampToValueAtTime(0,t1);
+  var o=actx.createOscillator();
+  o.setPeriodicWave(buzzWave); o.frequency.value=BUZZ_F0;
+  o.connect(g); g.connect(actx.destination);
+  o.start(t0); o.stop(t1+.01);
+}
+function buzzer(sec){
+  sec=sec||BUZZ_SEC;
+  var m=BUZZ_MODES[S.buzz];
+  initAudio();
+  if(!actx||m.vol<=0) return;
+  if(!m.pulse){ tone(sec,0,m.vol); return; }
+  var t=0;
+  while(t<sec-.01){ tone(Math.min(BUZZ_ON,sec-t),t,m.vol); t+=BUZZ_ON+BUZZ_OFF; }
+}
+
+/* ===================================================================
+   2. 設定と試合状態
+   =================================================================== */
+function defaults(){
+  return {
+    p1:3*60,      /* 試合時間 */
+    p3:20,        /* 抑え込み 一本 */
+    p4:10,        /* 抑え込み 技あり */
+    p5:5,         /* 抑え込み 有効 */
+    useY:true,    /* 有効（Y）を使うか */
+    countDown:true,
+    buzz:0
+  };
+}
+var S=defaults();
+try{
+  var sv=JSON.parse(localStorage.getItem("ajTimer")||"null");
+  if(sv){ for(var k in S){ if(sv[k]!==undefined) S[k]=sv[k]; } }
+}catch(e){}
+function saveS(){ try{ localStorage.setItem("ajTimer",JSON.stringify(S)); }catch(e){} }
+
+function newPlayer(){ return {i:0,w:0,y:0,s:0}; }
+var M=null;
+function newMatch(){
+  M={
+    ms:S.p1*1000,      /* 通常＝残り時間／GS・延長＝経過時間 */
+    running:false,
+    gs:false,
+    over:false,
+    overtime:false,    /* 試合時間は0だが抑え込みが続いている */
+    osaeMs:0,
+    osaeRun:false,
+    osaeSide:null,     /* "R" / "W" */
+    osaeGrant:null,    /* 抑え込みで加算中の点 "Y"/"W"/"I"/"AWASE" */
+    osaePaused:false,  /* 「待て」で時計と一緒に止めた */
+    R:newPlayer(), W:newPlayer(),
+    winner:null, winBy:""
+  };
+}
+newMatch();
+function opp(s){ return s==="R"?"W":"R"; }
+
+/* ---- 取り消し（直前の状態を積んでおく） ---- */
+var undoStack=[];
+function mark(){ undoStack.push(clone(M)); if(undoStack.length>40) undoStack.shift(); }
+function undo(){
+  if(!undoStack.length) return;
+  M=undoStack.pop();
+  render();
+}
+
+/* ===================================================================
+   3. 抑え込みと得点の連動
+   =================================================================== */
+/* 一本になる秒数（技ありを持っていれば合わせ技一本で W の秒数） */
+function ipponSec(){
+  if(M.osaeSide && M[M.osaeSide].w>=1 && S.p4<S.p3) return S.p4;
+  return S.p3;
+}
+/* その秒数で与える点 */
+function grantAt(sec,side){
+  if(!side) return null;
+  if(M.gs){
+    var g=S.useY?Math.min(S.p3,S.p4,S.p5):Math.min(S.p3,S.p4);
+    if(sec<g) return null;
+    return g===S.p3?"I":(g===S.p4?"W":"Y");
+  }
+  if(sec>=S.p3) return "I";
+  if(sec>=S.p4) return (M[side].w>=1)?"AWASE":"W";
+  if(S.useY&&sec>=S.p5) return "Y";
+  return null;
+}
+/* 抑え込みで加算中の点を合成した「見た目の得点」 */
+function eff(side){
+  var p=M[side], o={i:p.i,w:p.w,y:p.y,s:p.s};
+  if(M.osaeSide===side&&M.osaeGrant){
+    if(M.osaeGrant==="Y") o.y=Math.min(9,o.y+1);
+    else if(M.osaeGrant==="W") o.w=Math.min(2,o.w+1);
+    else if(M.osaeGrant==="I") o.i=1;
+    else if(M.osaeGrant==="AWASE"){ o.i=1; o.w=0; }
+  }
+  return o;
+}
+/* 加算中の点を確定させる */
+function commitOsae(){
+  if(M.osaeSide&&M.osaeGrant){
+    var e=eff(M.osaeSide), p=M[M.osaeSide];
+    p.i=e.i; p.w=e.w; p.y=e.y;
+  }
+  M.osaeGrant=null;
+}
+/* 抑え込み時間から点と勝敗を判定する */
+function evalOsae(){
+  var sec=M.osaeMs/1000, side=M.osaeSide;
+  var prev=M.osaeGrant;
+  M.osaeGrant=grantAt(sec,side);
+  if(side&&M.osaeGrant&&M.osaeGrant!==prev) flashRow(side);
+
+  if(M.gs){
+    var g=S.useY?Math.min(S.p3,S.p4,S.p5):Math.min(S.p3,S.p4);
+    if(sec>=g){
+      M.osaeMs=g*1000; M.osaeRun=false; commitOsae();
+      finish(side,"ゴールデンスコア");
+    }
+    return;
+  }
+  var need=ipponSec();
+  if(sec>=need){
+    M.osaeMs=need*1000; M.osaeRun=false;
+    var by=(M.osaeGrant==="AWASE")?"合わせ技一本":"一本";
+    commitOsae();
+    finish(side,by);
+  }
+}
+
+/* ===================================================================
+   4. 勝敗
+   =================================================================== */
+function cmp(a,b){
+  if(a.i!==b.i) return a.i-b.i;
+  if(a.w!==b.w) return a.w-b.w;
+  if(a.y!==b.y) return a.y-b.y;
+  return 0;
+}
+function finish(side,why){
+  M.over=true; M.running=false; M.osaeRun=false; M.overtime=false;
+  M.winner=side||null; M.winBy=why||"";
+  releaseWake();
+  buzzer(BUZZ_SEC);
+  showWin();
+}
+/* 試合時間終了 */
+function timeUp(){
+  if(M.over) return;
+  var d=cmp(M.R,M.W);
+  if(d>0) finish("R","判定");
+  else if(d<0) finish("W","判定");
+  else finish(null,"引き分け（GSへ）");
+}
+
+/* ===================================================================
+   5. 時間の進行
+   =================================================================== */
+var last=0;
+function tick(now){
+  requestAnimationFrame(tick);
+  if(!last) last=now;
+  var dt=now-last; last=now;
+  if(dt>1000) dt=1000;            /* タブ復帰時の飛びを抑える */
+
+  if(M.running){
+    if(M.gs){ M.ms+=dt; }
+    else if(M.overtime){ M.ms+=dt; }
+    else{
+      M.ms-=dt;
+      if(M.ms<=0){
+        M.ms=0;
+        if(M.osaeRun){ M.overtime=true; }   /* 抑え込み中は終わらせない */
+        else{ timeUp(); }
+      }
+    }
+  }
+  if(M.osaeRun){ M.osaeMs+=dt; evalOsae(); }
+  render();
+}
+requestAnimationFrame(tick);
+
+/* ===================================================================
+   6. 描画
+   =================================================================== */
+function fmt2(n){ n=clamp(n,0,99); return (n<10?"0":"")+n; }
+function timeText(){
+  var sec;
+  if(M.gs) sec=Math.floor(M.ms/1000);
+  else if(M.overtime) sec=S.p1+Math.floor(M.ms/1000);
+  else if(!S.countDown) sec=S.p1-Math.ceil(M.ms/1000);
+  else sec=Math.ceil(M.ms/1000);
+  sec=clamp(sec,0,99*60+59);
+  return Math.floor(sec/60)+":"+fmt2(sec%60);
+}
+var lastLen=0;
+function render(){
+  /* --- 時計 --- */
+  var t=timeText();
+  if(el("time").textContent!==t){ el("time").textContent=t; }
+  if(t.length!==lastLen){ lastLen=t.length; fit(); }
+
+  var ck=el("clock");
+  ck.classList.toggle("stopped",!M.running&&!M.over);
+  ck.classList.toggle("over",M.over);
+  ck.classList.toggle("warn",!M.over&&!M.gs&&!M.overtime&&M.running&&M.ms<=10000);
+  el("gsTag").classList.toggle("on",M.gs);
+  el("clockHint").style.opacity=M.running?"0":"1";
+  var hint=M.over?"「次の試合」で新しい試合へ　　ダブルタップ＝時間の編集"
+                 :"タップ＝開始 / 停止　　ダブルタップ＝時間の編集";
+  if(el("clockHint").textContent!==hint) el("clockHint").textContent=hint;
+
+  /* --- 抑え込み --- */
+  var os=el("osae"), osec=Math.floor(M.osaeMs/1000);
+  el("osaeNum").textContent=fmt2(osec);
+  os.classList.toggle("on",M.osaeMs>0||M.osaeRun);
+  os.classList.toggle("running",M.osaeRun);
+  os.classList.toggle("side-R",M.osaeSide==="R"&&M.osaeRun);
+  os.classList.toggle("side-W",M.osaeSide==="W"&&M.osaeRun);
+  el("osaeFoot").textContent=M.osaeRun?"タップ＝解けた":"タップで開始";
+
+  /* --- 得点 --- */
+  ["R","W"].forEach(function(s){
+    var p=eff(s), row=el(s==="R"?"rowR":"rowW");
+    row.classList.toggle("holding",M.osaeSide===s&&M.osaeRun);
+    row.classList.toggle("won",M.over&&M.winner===s);
+    var live=(M.osaeSide===s&&M.osaeGrant)?M.osaeGrant:null;
+    setCell(s,"i",p.i,live==="I"||live==="AWASE");
+    setCell(s,"w",p.w,live==="W");
+    setCell(s,"y",p.y,live==="Y");
+    setShido(s,p.s);
+  });
+  document.body.classList.toggle("no-y",!S.useY);
+  cellOf("R","y").style.display=S.useY?"":"none";
+  cellOf("W","y").style.display=S.useY?"":"none";
+
+  /* --- 状態表示 --- */
+  var chip=el("stateChip"), txt, cls;
+  if(M.over){ txt="試合終了"; cls="over"; }
+  else if(M.osaeRun){ txt="抑え込み"; cls="osae"; }
+  else if(M.running){ txt=M.gs?"GS 進行中":"試合中"; cls="run"; }
+  else if(M.gs&&M.ms===0){ txt="GS はじめ待ち"; cls="stop"; }
+  else if(M.ms===S.p1*1000&&!M.gs){ txt="はじめ待ち"; cls="stop"; }
+  else{ txt="待　て"; cls="stop"; }
+  if(el("stateTxt").textContent!==txt) el("stateTxt").textContent=txt;
+  chip.className="chip "+cls;
+  el("cGs").classList.toggle("on",M.gs);
+  el("cUndo").disabled=undoStack.length===0;
+}
+var cellCache={};
+function cellOf(side,key){
+  var id=side+key;
+  if(!cellCache[id]) cellCache[id]=document.querySelector('[data-s="'+side+'"][data-k="'+key+'"]');
+  return cellCache[id];
+}
+function setCell(side,key,val,live){
+  var c=cellOf(side,key), v=c.querySelector(".vl");
+  var s=String(val);
+  if(v.textContent!==s) v.textContent=s;
+  c.classList.toggle("zero",val===0);
+  c.classList.toggle("live",!!live);
+}
+function setShido(side,n){
+  var c=cellOf(side,"s"), v=c.querySelector(".vl");
+  var s=n>0?("S"+n):"S";
+  if(v.textContent!==s) v.textContent=s;
+  c.classList.toggle("zero",n===0);
+  c.classList.toggle("s3",n>=3);
+}
+function flashRow(side){
+  var row=el(side==="R"?"rowR":"rowW");
+  Array.prototype.forEach.call(row.querySelectorAll(".cell"),function(c){
+    c.classList.remove("flash"); void c.offsetWidth; c.classList.add("flash");
+  });
+}
+
+/* 文字サイズを実測から決める（機種を問わず枠いっぱいに出す） */
+function fit(){
+  var c=el("clock").getBoundingClientRect();
+  if(c.width<40) return;
+  var txt=el("time").textContent, w=0;
+  for(var i=0;i<txt.length;i++) w+=(txt.charAt(i)===":")?0.34:0.62;
+  var fs=Math.min(c.width*0.92/w, c.height*0.80);
+  document.documentElement.style.setProperty("--fsTime",Math.floor(fs)+"px");
+
+  var o=el("osae").getBoundingClientRect();
+  var tight=o.height<128;
+  el("osae").classList.toggle("tight",tight);
+  var fo=Math.min(o.width*0.84/1.28, o.height*(tight?0.62:0.54));
+  document.documentElement.style.setProperty("--fsOsae",Math.floor(fo)+"px");
+
+  var r=el("rowR").getBoundingClientRect();
+  var cols=S.useY?4:3;
+  var cw=(r.width-el("rowR").querySelector(".side").getBoundingClientRect().width)/cols;
+  var fp=Math.min(cw*0.80, r.height*0.80);
+  document.documentElement.style.setProperty("--fsPt",Math.floor(fp)+"px");
+}
+window.addEventListener("resize",function(){ fit(); });
+window.addEventListener("orientationchange",function(){ setTimeout(fit,180); });
+
+/* ===================================================================
+   7. タッチ操作
+   =================================================================== */
+/* --- 時計：タップ＝開始／停止、ダブルタップ＝編集 --- */
+function toggleRun(){
+  if(M.over) return;
+  M.running=!M.running;
+  if(M.running){
+    requestWake();
+    if(M.osaePaused){ M.osaeRun=true; M.osaePaused=false; }   /* そのまま→よし */
+  }else{
+    if(M.osaeRun){ M.osaeRun=false; M.osaePaused=true; }      /* 待て */
+    releaseWake();
+  }
+}
+(function(){
+  var ck=el("clock"), lastTap=0, snap=null;
+  ck.addEventListener("pointerdown",function(){ ck.classList.add("press"); });
+  ["pointerup","pointercancel","pointerleave"].forEach(function(ev){
+    ck.addEventListener(ev,function(){ ck.classList.remove("press"); });
+  });
+  ck.addEventListener("click",function(){
+    initAudio();
+    var now=Date.now();
+    if(now-lastTap<300){
+      /* ダブルタップ：1回目のタップを取り消して編集画面へ */
+      lastTap=0;
+      if(snap){ M=snap; snap=null; }
+      M.running=false; releaseWake();
+      openEdit();
+    }else{
+      lastTap=now;
+      snap=clone(M);
+      mark();
+      toggleRun();
+      vib(8);
+    }
+    render();
+  });
+})();
+
+/* --- 抑え込み --- */
+function startOsae(side){
+  if(M.over) return;
+  mark();
+  commitOsae();
+  M.osaeSide=side; M.osaeMs=0; M.osaeRun=true; M.osaePaused=false;
+  if(!M.running){ M.running=true; }     /* 抑え込み中は試合も進行中 */
+  requestWake();
+  render();
+}
+function stopOsae(){
+  mark();
+  M.osaeRun=false; M.osaePaused=false;
+  commitOsae();
+  /* 試合時間が終わっていた場合は、解けた時点で試合終了 */
+  if(M.overtime){ M.overtime=false; timeUp(); }
+  render();
+}
+(function(){
+  var os=el("osae"), lastTap=0, tapActed=false;
+  /* 開始ゾーン・パネル本体のどちらを押しても同じ流れで処理する。
+     タップ＝開始／解けた、ダブルタップ＝00 に戻す。 */
+  function osaeTap(zone){
+    initAudio();
+    var now=Date.now(), dbl=(now-lastTap<300);
+    if(dbl){
+      lastTap=0;
+      if(tapActed&&undoStack.length) M=undoStack.pop();   /* 1回目のタップを取り消す */
+      tapActed=false;
+      mark();
+      M.osaeRun=false; M.osaeMs=0; M.osaeGrant=null; M.osaeSide=null; M.osaePaused=false;
+      render();
+      return;
+    }
+    lastTap=now; tapActed=false;
+    if(M.osaeRun){ stopOsae(); tapActed=true; vib(8); }
+    else if(zone){ startOsae(zone); tapActed=true; vib(8); }
+  }
+  el("pickR").addEventListener("click",function(e){ e.stopPropagation(); osaeTap("R"); });
+  el("pickW").addEventListener("click",function(e){ e.stopPropagation(); osaeTap("W"); });
+  os.addEventListener("click",function(){ osaeTap(null); });
+  [el("pickR"),el("pickW")].forEach(function(b){
+    b.addEventListener("pointerdown",function(){ b.classList.add("press"); });
+    ["pointerup","pointercancel","pointerleave"].forEach(function(ev){
+      b.addEventListener(ev,function(){ b.classList.remove("press"); });
+    });
+  });
+})();
+
+/* --- 得点：タップ＝＋1、長押し＝−1 --- */
+function addPoint(side,key,d){
+  var p=M[side];
+  if(key==="i"){
+    if(d>0){ p.i=1; finish(side,"一本"); }
+    else{ p.i=0; reopen(); }
+  }else if(key==="w"){
+    if(d>0){
+      p.w=Math.min(2,p.w+1);
+      if(p.w>=2){ p.w=0; p.i=1; finish(side,"合わせ技一本"); }
+      else if(M.gs){ finish(side,"ゴールデンスコア"); }
+    }else{
+      p.w=Math.max(0,p.w-1); reopen();
+    }
+  }else if(key==="y"){
+    if(d>0){ p.y=Math.min(9,p.y+1); if(M.gs) finish(side,"ゴールデンスコア"); }
+    else{ p.y=Math.max(0,p.y-1); reopen(); }
+  }else if(key==="s"){
+    if(d>0){
+      p.s=Math.min(3,p.s+1);
+      if(p.s>=3){ M[opp(side)].i=1; finish(opp(side),"反則負け"); }
+      else if(M.gs){ finish(opp(side),"ゴールデンスコア（指導）"); }
+    }else{
+      var was=p.s;
+      p.s=Math.max(0,p.s-1);
+      if(was>=3){ M[opp(side)].i=0; reopen(); }
+    }
+  }
+  flashRow(side);
+}
+/* 訂正で試合終了を取り消す */
+function reopen(){
+  if(!M.over) return;
+  if(M.R.i>0||M.W.i>0||M.R.s>=3||M.W.s>=3) return;
+  M.over=false; M.winner=null; M.winBy=""; hideWin();
+}
+(function(){
+  Array.prototype.forEach.call(document.querySelectorAll(".cell"),function(c){
+    var timer=null, held=false, armed=false, t0=0, raf=null;
+    var bar=c.querySelector(".hold");
+    function progress(){
+      var r=clamp((Date.now()-t0)/550,0,1);
+      bar.style.width=(r*100)+"%";
+      if(r<1&&armed) raf=requestAnimationFrame(progress);
+    }
+    function reset(){
+      clearTimeout(timer); cancelAnimationFrame(raf);
+      armed=false; bar.style.width="0"; c.classList.remove("press");
+    }
+    c.addEventListener("pointerdown",function(e){
+      e.preventDefault(); initAudio();
+      held=false; armed=true; t0=Date.now();
+      c.classList.add("press"); progress();
+      timer=setTimeout(function(){
+        held=true; armed=false; bar.style.width="0";
+        mark();
+        addPoint(c.getAttribute("data-s"),c.getAttribute("data-k"),-1);
+        vib(24); render();
+      },550);
+    });
+    c.addEventListener("pointerup",function(){
+      var was=armed; reset();
+      if(was&&!held){
+        mark();
+        addPoint(c.getAttribute("data-s"),c.getAttribute("data-k"),1);
+        vib(8); render();
+      }
+      held=false;
+    });
+    ["pointercancel","pointerleave"].forEach(function(ev){ c.addEventListener(ev,reset); });
+  });
+})();
+
+/* --- 勝者バナー --- */
+function showWin(){
+  var w=el("win");
+  if(M.winner){
+    el("winWho").textContent=(M.winner==="R"?"赤":"白")+" の勝ち";
+    el("winWho").className="num "+M.winner;
+  }else{
+    el("winWho").textContent="引き分け";
+    el("winWho").className="num";
+  }
+  el("winWhy").textContent=M.winBy;
+  w.classList.add("on");
+}
+function hideWin(){ el("win").classList.remove("on"); }
+el("win").addEventListener("click",function(){ hideWin(); });
+
+/* ===================================================================
+   8. 上部バーと設定
+   =================================================================== */
+function press(id,fn){
+  var b=el(id);
+  b.addEventListener("click",function(){ initAudio(); fn(); render(); });
+  b.addEventListener("pointerdown",function(){ b.classList.add("press"); });
+  ["pointerup","pointercancel","pointerleave"].forEach(function(ev){
+    b.addEventListener(ev,function(){ b.classList.remove("press"); });
+  });
+}
+press("cUndo",undo);
+(function(){
+  var b=el("cNext"), armed=false, t=null;
+  function disarm(){ armed=false; b.textContent="次の試合"; b.classList.remove("on"); clearTimeout(t); }
+  press("cNext",function(){
+    if(armed){ disarm(); mark(); newMatch(); hideWin(); releaseWake(); return; }
+    armed=true; b.textContent="もう一度"; b.classList.add("on");
+    t=setTimeout(function(){ disarm(); render(); },4000);
+  });
+})();
+press("cGs",function(){
+  mark();
+  if(M.gs){ M.gs=false; M.ms=S.p1*1000; }
+  else{ M.gs=true; M.over=false; M.overtime=false; M.ms=0; M.running=false; hideWin(); }
+});
+press("cEdit",function(){ openEdit(); });
+press("cHelp",function(){ el("helpSheet").classList.add("on"); });
+press("helpClose",function(){ el("helpSheet").classList.remove("on"); });
+press("cFull",function(){
+  var d=document.documentElement;
+  if(!document.fullscreenElement){
+    (d.requestFullscreen||d.webkitRequestFullscreen||function(){}).call(d);
+    if(screen.orientation&&screen.orientation.lock){ try{ screen.orientation.lock("landscape"); }catch(e){} }
+  }else{
+    (document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document);
+  }
+});
+
+function openEdit(){ el("editSheet").classList.add("on"); renderEdit(); }
+press("editClose",function(){ el("editSheet").classList.remove("on"); saveS(); fit(); });
+
+function fmtMS(s){ return Math.floor(s/60)+":"+fmt2(s%60); }
+function renderEdit(){
+  el("vP1").textContent=fmtMS(S.p1);
+  el("vNow").textContent=timeText();
+  el("vP3").textContent=S.p3+"秒";
+  el("vP4").textContent=S.p4+"秒";
+  el("vP5").textContent=S.p5+"秒";
+  el("tgY").textContent=S.useY?"使う":"使わない";
+  el("tgDir").textContent=S.countDown?"減算":"加算";
+  el("tgBuz").textContent=BUZZ_MODES[S.buzz].name;
+}
+Array.prototype.forEach.call(document.querySelectorAll("[data-adj]"),function(b){
+  var a=b.getAttribute("data-adj").split(","), key=a[0], d=parseInt(a[1],10);
+  b.addEventListener("click",function(){
+    initAudio();
+    if(key==="now"){
+      mark();
+      M.ms=clamp(M.ms+d*1000,0,(99*60+59)*1000);
+      if(M.over&&M.ms>0){ M.over=false; M.winner=null; hideWin(); }
+    }else{
+      S[key]=clamp(S[key]+d,key==="p1"?0:0,key==="p1"?99*60+59:99);
+      if(key==="p1"&&!M.running&&!M.gs&&!M.over){ M.ms=S.p1*1000; }
+      saveS();
+    }
+    renderEdit(); render();
+  });
+  b.addEventListener("pointerdown",function(){ b.classList.add("press"); });
+  ["pointerup","pointercancel","pointerleave"].forEach(function(ev){
+    b.addEventListener(ev,function(){ b.classList.remove("press"); });
+  });
+});
+press("tgY",function(){ S.useY=!S.useY; saveS(); renderEdit(); fit(); });
+press("tgDir",function(){ S.countDown=!S.countDown; saveS(); renderEdit(); });
+press("tgBuz",function(){ S.buzz=(S.buzz+1)%BUZZ_MODES.length; saveS(); renderEdit(); });
+press("tgTest",function(){ buzzer(1.0); });
+press("btnClear",function(){ mark(); newMatch(); hideWin(); renderEdit(); });
+press("btnReset",function(){
+  S=defaults(); saveS(); mark(); newMatch(); hideWin(); renderEdit(); fit();
+});
+
+/* ===================================================================
+   9. 画面スリープ防止
+   =================================================================== */
+var wakeLock=null;
+function requestWake(){
+  if(!("wakeLock" in navigator)||wakeLock) return;
+  try{ navigator.wakeLock.request("screen").then(function(w){ wakeLock=w; },function(){}); }catch(e){}
+}
+function releaseWake(){
+  if(wakeLock){ try{ wakeLock.release(); }catch(e){} wakeLock=null; }
+}
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="visible"&&(M.running||M.osaeRun)) requestWake();
+});
+window.addEventListener("touchstart",initAudio,{once:true});
+window.addEventListener("mousedown",initAudio,{once:true});
+/* 拡大縮小のジェスチャは誤操作のもとなので無効にする */
+document.addEventListener("gesturestart",function(e){ e.preventDefault(); });
+document.addEventListener("dblclick",function(e){ e.preventDefault(); });
+
+fit(); render();
+window.addEventListener("load",function(){ fit(); render(); });
+</script>
+</body>
+</html>
