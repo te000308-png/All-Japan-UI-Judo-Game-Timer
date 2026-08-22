@@ -165,13 +165,23 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
 #rowR{ grid-row:3;background:var(--red-deep); }
 #rowW{ grid-row:4;background:var(--white-deep); }
 
-/* 表の見出し（I / W / Y / S）。数字を大きく取るためにラベルはここへ出す */
-.phead{ grid-row:2;align-items:end;padding-bottom:1px; }
-.phead div{
-  text-align:center;line-height:1;font-weight:900;
-  font-size:clamp(11px,3.2vh,30px);letter-spacing:.06em;color:#93a0b2;
+/* 表の見出し。数字を大きく取るためラベルはここへ出し、
+   どの列が何の点なのかが分かるように日本語も並べる */
+.phead{ grid-row:2;align-items:stretch; }
+.phead>div{
+  display:flex;align-items:center;justify-content:center;gap:.45em;
+  line-height:1;background:#171d27;border-radius:7px;
 }
-.phead .hsp{ width:var(--sideW); }
+.phead .hsp{ width:var(--sideW);background:none; }
+.phead b{
+  font-size:clamp(13px,4.4vh,42px);font-weight:900;letter-spacing:.04em;color:#eef2f8;
+}
+.phead i{
+  font-size:clamp(10px,2.3vh,22px);font-style:normal;font-weight:800;
+  letter-spacing:.04em;color:#8d99ab;white-space:nowrap;
+}
+/* 背の低い画面では日本語まで置くと窮屈になるので文字だけにする */
+@media (max-height:430px){ .phead i{ display:none; } }
 
 /* 左端の選手表示（抑え込み中はここが「抑」に変わって光る） */
 .side{
@@ -293,7 +303,10 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
 
     <div class="phead" id="phead">
       <div class="hsp"></div>
-      <div>I</div><div>W</div><div id="hY">Y</div><div>S</div>
+      <div><b>I</b><i>一本</i></div>
+      <div><b>W</b><i>技あり</i></div>
+      <div id="hY"><b>Y</b><i>有効</i></div>
+      <div><b>S</b><i>指導</i></div>
     </div>
 
     <div class="prow" id="rowR">
