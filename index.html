@@ -381,7 +381,8 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
       <button class="sbtn wide danger" id="btnClear">オールクリア</button>
       <button class="sbtn wide danger" id="btnReset">初期設定に戻す</button>
     </div>
-    <p class="note">設定は端末に保存され、次に開いたときも引き継がれます。</p>
+    <p class="note">設定は端末に保存され、次に開いたときも引き継がれます。<br>
+      ブザーが聞こえないときは、端末の音量を上げてから「試聴」で確かめてください。</p>
   </div>
 </div>
 
@@ -399,7 +400,7 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
     <p class="note">
       W が 2 つで合わせ技一本、S3 で反則負けになり、その時点で試合が終わります。<br>
       抑え込み中は加算される点が点滅し、「解けた」で確定します。<br>
-      ブザーは抑え込みの一本・合わせ技一本・試合時間の終了だけで鳴ります（立技の一本と反則負けでは鳴りません）。<br>
+      ブザーは<b>試合時間の終了</b>・<b>抑え込みの一本</b>・<b>合わせ技一本</b>の3つで鳴ります（立技の一本と反則負けでは鳴りません）。<br>
       「待て」で時計を止めると抑え込みも一緒に止まり、「はじめ」で一緒に動き出します（そのまま／よし）。<br>
       ゴールデンスコア（GS）中は加算表示になり、先に取った側が勝ちです。
     </p>
@@ -432,6 +433,7 @@ var BUZZ_MODES=[{name:"大・連続",vol:.6,pulse:false},
 var BUZZ_SEC=2.5, BUZZ_ON=.22, BUZZ_OFF=.13;
 
 function initAudio(){
+  primeEl();
   if(actx){ if(actx.state==="suspended"){ try{actx.resume();}catch(e){} } return; }
   var AC=window.AudioContext||window.webkitAudioContext; if(!AC) return;
   actx=new AC();
@@ -461,14 +463,102 @@ function tone(dur,when,vol){
   o.connect(g); g.connect(actx.destination);
   o.start(t0); o.stop(t1+.01);
 }
-function buzzer(sec){
-  sec=sec||BUZZ_SEC;
-  var m=BUZZ_MODES[S.buzz];
+function toneBuzz(sec,m){
   initAudio();
   if(!actx||m.vol<=0) return;
   if(!m.pulse){ tone(sec,0,m.vol); return; }
   var t=0;
   while(t<sec-.01){ tone(Math.min(BUZZ_ON,sec-t),t,m.vol); t+=BUZZ_ON+BUZZ_OFF; }
+}
+
+/* iPhone・iPad は本体の消音スイッチが入っていると Web Audio の音が出ない。
+   <audio> からの再生なら消音スイッチの影響を受けないので、同じ波形を
+   その場で WAV に組み立ててこちらから鳴らし、駄目なときだけ Web Audio に戻る。 */
+function buildWav(sec,vol,pulse){
+  var sr=22050;
+  var per=Math.round(sr/BUZZ_F0);       /* 1周期ぶんのサンプル数 */
+  var f0=sr/per;                        /* 割り切れる基本周波数にして継ぎ目をなくす */
+  var cyc=new Float32Array(per), peak=0, i, h, v, t;
+  for(i=0;i<per;i++){
+    t=i/sr; v=0;
+    for(h=0;h<BUZZ.length;h++) v+=BUZZ[h][1]*Math.cos(2*Math.PI*f0*BUZZ[h][0]*t+BUZZ[h][2]);
+    cyc[i]=v;
+    if(Math.abs(v)>peak) peak=Math.abs(v);
+  }
+  if(peak>0) for(i=0;i<per;i++) cyc[i]/=peak;
+
+  var n=Math.round(sr*sec), ab=new ArrayBuffer(44+n*2), dv=new DataView(ab), o=0;
+  function str(x){ for(var j=0;j<x.length;j++) dv.setUint8(o++,x.charCodeAt(j)); }
+  function u32(x){ dv.setUint32(o,x,true); o+=4; }
+  function u16(x){ dv.setUint16(o,x,true); o+=2; }
+  str("RIFF"); u32(36+n*2); str("WAVE");
+  str("fmt "); u32(16); u16(1); u16(1); u32(sr); u32(sr*2); u16(2); u16(16);
+  str("data"); u32(n*2);
+
+  var atk=Math.round(sr*0.012), rel=Math.round(sr*0.03);   /* 実機の立ち上がり／切れ際 */
+  var onN=Math.round(sr*BUZZ_ON), offN=Math.round(sr*BUZZ_OFF), g, pos;
+  for(i=0;i<n;i++){
+    if(pulse){
+      pos=i%(onN+offN);
+      g=(pos>=onN)?0:vol*Math.min(1,pos/atk)*Math.min(1,(onN-pos)/rel);
+    }else{
+      g=vol*Math.min(1,i/atk)*Math.min(1,(n-i)/rel);
+    }
+    v=cyc[i%per]*g;
+    dv.setInt16(44+i*2,Math.max(-1,Math.min(1,v))*32767,true);
+  }
+  return ab;
+}
+var wavURL={}, aEl=null, primed=false;
+function audioEl(){
+  if(!aEl){
+    aEl=document.createElement("audio");
+    aEl.preload="auto";
+    aEl.setAttribute("playsinline","");
+    document.body.appendChild(aEl);
+  }
+  return aEl;
+}
+function wavFor(sec,mode){
+  var key=sec+"/"+mode;
+  if(key in wavURL) return wavURL[key];
+  var m=BUZZ_MODES[mode], url=null;
+  try{ url=URL.createObjectURL(new Blob([buildWav(sec,m.vol,m.pulse)],{type:"audio/wav"})); }catch(e){}
+  wavURL[key]=url;
+  return url;
+}
+/* 最初のタッチのときに一度だけ鳴らして、以後いつでも鳴らせるようにする。
+   頭は無音から立ち上がるので、この試し再生はほとんど聞こえない。 */
+function primeEl(){
+  if(primed) return;
+  var url=wavFor(BUZZ_SEC,S.buzz);
+  if(!url) return;
+  primed=true;
+  try{
+    var e2=audioEl();
+    e2.src=url;
+    var pr=e2.play();
+    var stop=function(){ try{ e2.pause(); e2.currentTime=0; }catch(e){} };
+    if(pr&&pr.then) pr.then(stop,function(){ primed=false; });
+    else stop();
+  }catch(e){ primed=false; }
+}
+function buzzer(sec){
+  sec=sec||BUZZ_SEC;
+  var m=BUZZ_MODES[S.buzz];
+  if(m.vol<=0) return;
+  var url=wavFor(sec,S.buzz);
+  if(url){
+    try{
+      var e2=audioEl();
+      if(e2.src!==url) e2.src=url;
+      e2.currentTime=0;
+      var pr=e2.play();
+      if(pr&&pr.catch) pr.catch(function(){ toneBuzz(sec,m); });
+      return;
+    }catch(e){}
+  }
+  toneBuzz(sec,m);
 }
 
 /* ===================================================================
@@ -1048,7 +1138,7 @@ Array.prototype.forEach.call(document.querySelectorAll("[data-adj]"),function(b)
 });
 press("tgY",function(){ S.useY=!S.useY; saveS(); renderEdit(); fit(); });
 press("tgDir",function(){ S.countDown=!S.countDown; saveS(); renderEdit(); });
-press("tgBuz",function(){ S.buzz=(S.buzz+1)%BUZZ_MODES.length; saveS(); renderEdit(); });
+press("tgBuz",function(){ S.buzz=(S.buzz+1)%BUZZ_MODES.length; saveS(); primed=false; primeEl(); renderEdit(); });
 press("tgTest",function(){ buzzer(1.0); });
 press("btnClear",function(){ mark(); newMatch(); hideWin(); renderEdit(); });
 press("btnReset",function(){
