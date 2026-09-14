@@ -40,6 +40,9 @@
   --fsPt:52px;
   --fsShido:52px;
   --sideW:clamp(34px,6vw,80px);
+  --vk:0;                 /* 字面を上下中央に置くためのずらし量（文字サイズ比） */
+  --glowT:12px;           /* 試合時間の発光。枠からはみ出して切れない大きさにする */
+  --glowO:8px;
 }
 
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
@@ -103,11 +106,12 @@ body{
 #clock.press{ background:#161c25; }
 #time{
   font-size:var(--fsTime);letter-spacing:.01em;
-  color:var(--led-green);text-shadow:0 0 .16em rgba(43,255,120,.55);
+  color:var(--led-green);text-shadow:0 0 var(--glowT) rgba(43,255,120,.55);
+  transform:translateY(calc(var(--fsTime) * var(--vk)));
   transition:color .12s linear;
 }
-#clock.stopped #time{ color:var(--led-amber);text-shadow:0 0 .16em rgba(255,194,51,.5); }
-#clock.over #time{ color:var(--led-red);text-shadow:0 0 .16em rgba(255,74,61,.5); }
+#clock.stopped #time{ color:var(--led-amber);text-shadow:0 0 var(--glowT) rgba(255,194,51,.5); }
+#clock.over #time{ color:var(--led-red);text-shadow:0 0 var(--glowT) rgba(255,74,61,.5); }
 /* 残り10秒は点滅させて知らせる */
 #clock.warn #time{ animation:blink .5s steps(1,end) infinite; }
 @keyframes blink{ 50%{opacity:.25;} }
@@ -131,9 +135,10 @@ body{
 }
 #osaeNum{
   font-size:var(--fsOsae);color:#59636f;line-height:1;
+  transform:translateY(calc(var(--fsOsae) * var(--vk)));
   transition:color .12s linear;
 }
-#osae.on #osaeNum{ color:var(--led-cyan);text-shadow:0 0 .18em rgba(77,227,255,.6); }
+#osae.on #osaeNum{ color:var(--led-cyan);text-shadow:0 0 var(--glowO) rgba(77,227,255,.6); }
 #osae.side-R{ border-color:var(--red); box-shadow:inset 0 0 0 2px rgba(216,31,42,.35); }
 #osae.side-W{ border-color:var(--white-deep); box-shadow:inset 0 0 0 2px rgba(238,242,248,.25); }
 #osae.tight #osaeCap{ display:none; }
@@ -205,7 +210,10 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
 #rowR .cell{ background:var(--red);color:#fff; }
 #rowW .cell{ background:var(--white);color:#11151c; }
 .cell.press{ filter:brightness(1.28); }
-.cell .vl{ font-size:var(--fsPt);font-weight:800;line-height:1;font-variant-numeric:tabular-nums; }
+.cell .vl{
+  font-size:var(--fsPt);font-weight:800;line-height:1;font-variant-numeric:tabular-nums;
+  transform:translateY(calc(var(--fsPt) * var(--vk)));
+}
 .cell.zero .vl{ opacity:.26; }
 #rowW .cell.zero .vl{ opacity:.34; }
 /* 抑え込みで加算中の点は点滅させる（解けた時点で確定） */
@@ -216,7 +224,10 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
 /* 指導セル */
 .prow.won{ outline:3px solid #ffd34d;outline-offset:-3px;box-shadow:0 0 22px rgba(255,211,77,.45); }
 
-.cell.shido .vl{ font-size:var(--fsShido);color:var(--led-shido); }
+.cell.shido .vl{
+  font-size:var(--fsShido);color:var(--led-shido);
+  transform:translateY(calc(var(--fsShido) * var(--vk)));
+}
 #rowW .cell.shido .vl{ color:#c07d00; }
 .cell.shido.s3 .vl{ color:#ffe14d;background:#111;border-radius:.12em;padding:0 .12em; }
 
@@ -831,19 +842,31 @@ function flashRow(side){
 /* 文字サイズは枠の実測から決める。
    数字は文字サイズより2〜3割小さく描かれる（書体ごとに違う）ので、
    実際に描かれる高さを1度だけ測っておき、それを基準に枠いっぱいまで拡大する。 */
-var GLYPH=null;
+var GLYPH=null, VK=0;
 function glyphH(){
   if(GLYPH) return GLYPH;
-  var r=0.72;
+  var r=0.72, vk=0;
   try{
     var x=document.createElement("canvas").getContext("2d");
     var cs=getComputedStyle(el("time"));
     x.font=(cs.fontWeight||"800")+" 100px "+cs.fontFamily;
     var m=x.measureText("0");
-    var h=(m.actualBoundingBoxAscent+m.actualBoundingBoxDescent)/100;
-    if(h>0.4&&h<1) r=h;
+    var aA=m.actualBoundingBoxAscent/100, aD=m.actualBoundingBoxDescent/100;
+    var fA=(m.fontBoundingBoxAscent||0)/100, fD=(m.fontBoundingBoxDescent||0)/100;
+    var h=aA+aD;
+    if(h>0.4&&h<1){
+      r=h;
+      if(fA>0){
+        /* 行の高さ1のときの基線の位置から、字面の中心が箱の中心から
+           どれだけずれているかを出す。書体によって上寄り／下寄りになる。 */
+        var base=(1-(fA+fD))/2+fA;
+        var mid=base-aA+h/2;
+        if(Math.abs(0.5-mid)<0.3) vk=0.5-mid;
+      }
+    }
   }catch(e){}
-  GLYPH=r;
+  GLYPH=r; VK=vk;
+  document.documentElement.style.setProperty("--vk",vk);
   return r;
 }
 function setV(n,v){ document.documentElement.style.setProperty(n,Math.max(8,Math.floor(v))+"px"); }
@@ -861,7 +884,9 @@ function fit(){
   if(M.gs) needW+=wOf(el("gsTag"))+parseFloat(getComputedStyle(el("clock")).columnGap||0);
   /* 幅も高さも文字サイズに比例するので、1回の補正で収まる */
   var k=Math.min(1,c.width*0.97/needW);
-  if(k<1) setV("--fsTime",fs*k);
+  if(k<1){ fs=fs*k; setV("--fsTime",fs); }
+  /* 発光が枠からはみ出すと、そこで断ち切られて数字が切れたように見える */
+  setV("--glowT",Math.min(fs*0.14,Math.max(2,(c.height-g*fs)/2-4)));
 
   /* --- 抑え込み --- */
   var o=el("osae").getBoundingClientRect();
@@ -870,7 +895,8 @@ function fit(){
   var fo=o.height*(tight?0.82:0.66)/g;
   setV("--fsOsae",fo);
   var ow=wOf(el("osaeNum")), oMax=o.width*0.90;
-  if(ow>oMax) setV("--fsOsae",fo*oMax/ow);
+  if(ow>oMax){ fo=fo*oMax/ow; setV("--fsOsae",fo); }
+  setV("--glowO",Math.min(fo*0.16,Math.max(2,(o.height-g*fo)/2-4)));
 
   /* --- 得点：I・W・Y と 指導（2文字）は別々に合わせる --- */
   var r=el("rowR").getBoundingClientRect();
