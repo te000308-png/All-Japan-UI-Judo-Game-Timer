@@ -284,6 +284,16 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
 @media (orientation:portrait){
   #board{ grid-template-rows:1.15fr auto 1fr 1fr;grid-template-columns:1fr minmax(84px,28%); }
 }
+button[hidden]{display:none !important;}
+/* 撮影の結果を知らせる小さな帯（数秒で消える） */
+#shotToast{
+  position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 18px);z-index:999;
+  transform:translate(-50%,20px);opacity:0;pointer-events:none;
+  background:rgba(20,24,32,.94);color:#fff;border:1px solid #3b4656;border-radius:10px;
+  padding:10px 18px;font-size:15px;font-weight:700;white-space:nowrap;
+  transition:opacity .2s,transform .2s;
+}
+#shotToast.on{opacity:1;transform:translate(-50%,0);}
 </style>
 </head>
 <body>
@@ -295,6 +305,7 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
     <button class="chip" id="cUndo">↩ 取消</button>
     <button class="chip" id="cNext">次の試合</button>
     <button class="chip" id="cEdit">⚙</button>
+    <button class="chip" id="cShot" hidden>📷 撮影</button>
     <button class="chip" id="cHelp">?</button>
     <button class="chip" id="cFull">⛶</button>
   </header>
@@ -409,6 +420,7 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
       ブザーが聞こえないときは、端末の音量を上げてから「試聴」で確かめてください。</p>
   </div>
 </div>
+<div id="shotToast"></div>
 
 <!-- 操作ヘルプ -->
 <div class="sheet" id="helpSheet">
@@ -420,6 +432,7 @@ body.no-y .prow,body.no-y .phead{ grid-template-columns:var(--sideW) 1fr 1fr 1.4
       <li><b>得点</b>：セルをタップで＋1、長押しで−1</li>
       <li><b>I</b>＝一本　<b>W</b>＝技あり　<b>Y</b>＝有効　<b>S1/S2/S3</b>＝指導</li>
       <li><b>↩ 取消</b>：直前の操作を取り消す</li>
+      <li><b>📷 撮影</b>（PCのみ）：今の画面をそのまま画像にしてダウンロードに保存。最初に出る画面で「このタブ」を選んで「共有」を押す</li>
     </ul>
     <p class="note">
       W が 2 つで合わせ技一本、S3 で反則負けになり、その時点で試合が終わります。<br>
@@ -1140,6 +1153,65 @@ press("cFull",function(){
     (document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document);
   }
 });
+
+/* ===================================================================
+   画面の撮影（PCのブラウザ向け）
+   ブラウザの画面共有の仕組みで「このタブ」の見た目をそのまま1枚撮り、
+   PNG としてダウンロードする。画像は端末の外へは一切送らない。
+   画面共有に対応していない端末（スマホ・iPad など）ではボタンを出さない。
+   =================================================================== */
+var shotBusy = false;
+function canShot(){ return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia); }
+function shotToast(msg){
+  var t = el("shotToast");
+  t.textContent = msg; t.classList.add("on");
+  clearTimeout(shotToast.tm);
+  shotToast.tm = setTimeout(function(){ t.classList.remove("on"); }, 2600);
+}
+function shotName(){
+  var d = new Date();
+  function p(n){ return (n < 10 ? "0" : "") + n; }
+  return d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) + "_試合タイマー_" +
+         p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + ".png";
+}
+function takeShot(){
+  if (shotBusy) return;                      /* 連打しても1回だけ */
+  if (!canShot()){ shotToast("この端末では撮影できません"); return; }
+  shotBusy = true;
+  var stream = null;
+  function stop(){ if (stream){ stream.getTracks().forEach(function(t){ t.stop(); }); stream = null; } }
+  navigator.mediaDevices.getDisplayMedia({
+    video:{ displaySurface:"browser" }, audio:false,
+    preferCurrentTab:true, selfBrowserSurface:"include", surfaceSwitching:"exclude"
+  }).then(function(s){
+    stream = s;
+    var v = document.createElement("video");
+    v.muted = true; v.playsInline = true; v.srcObject = s;
+    return v.play().then(function(){
+      /* 選択画面が消えて、画面が描き直されるのを少し待ってから撮る */
+      return new Promise(function(ok){ setTimeout(ok, 600); });
+    }).then(function(){
+      var c = document.createElement("canvas");
+      c.width = v.videoWidth; c.height = v.videoHeight;
+      if (!c.width || !c.height) throw new Error("empty");
+      c.getContext("2d").drawImage(v, 0, 0);
+      stop();
+      return new Promise(function(ok, ng){
+        c.toBlob(function(b){ b ? ok(b) : ng(new Error("blob")); }, "image/png");
+      });
+    });
+  }).then(function(blob){
+    var a = document.createElement("a"), url = URL.createObjectURL(blob);
+    a.href = url; a.download = shotName();
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    shotToast("撮影しました（ダウンロードに保存）");
+  }).catch(function(e){
+    shotToast(e && e.name === "NotAllowedError" ? "撮影をやめました" : "撮影できませんでした");
+  }).then(function(){ stop(); shotBusy = false; });
+}
+if (canShot()) el("cShot").hidden = false;
+press("cShot", takeShot);
 
 function openEdit(){ el("editSheet").classList.add("on"); renderEdit(); }
 press("editClose",function(){ el("editSheet").classList.remove("on"); saveS(); fit(); });
